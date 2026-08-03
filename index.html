@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Parent QR Scanner</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://unpkg.com/html5-qrcode" defer></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">School Annual Fest</p>
+          <h1>Parent QR Scanner</h1>
+        </div>
+        <a class="icon-link" href="admin.html">Admin</a>
+      </section>
+
+      <section class="scan-layout">
+        <div class="scanner-panel">
+          <div class="help-panel">
+            <p class="eyebrow">Direct camera page</p>
+            <p>This GitHub Pages scanner can use the mobile browser camera directly. Allow camera access when asked.</p>
+          </div>
+
+          <div id="reader"></div>
+          <div class="scan-actions">
+            <button id="startBtn" class="primary">Start camera</button>
+            <button id="stopBtn" class="secondary" disabled>Stop</button>
+          </div>
+
+          <div class="upload-row">
+            <label for="qrFile">Take or upload QR photo</label>
+            <input id="qrFile" type="file" accept="image/*" capture="environment">
+          </div>
+        </div>
+
+        <div class="verification-panel">
+          <div id="statusCard" class="status-card idle">
+            <p class="eyebrow">Status</p>
+            <h2>Ready to scan</h2>
+            <p>Scan a QR code, upload a QR photo, or enter the Pass ID manually.</p>
+          </div>
+
+          <form id="manualForm" class="manual-form">
+            <label for="manualCode">Pass ID or QR token</label>
+            <div class="input-row">
+              <input id="manualCode" name="manualCode" autocomplete="off" placeholder="AF-2026-00001">
+              <button class="secondary" type="submit">Check</button>
+            </div>
+          </form>
+
+          <div id="details" class="details hidden"></div>
+          <button id="markBtn" class="primary full" disabled>Mark entry</button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

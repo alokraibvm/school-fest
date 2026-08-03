@@ -1,0 +1,264 @@
+<script>
+  let html5QrCode = null;
+  let currentCode = '';
+  let adminData = null;
+  let activeTab = 'registrations';
+
+  function initScannerPage() {
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const manualForm = document.getElementById('manualForm');
+    const markBtn = document.getElementById('markBtn');
+    const qrFile = document.getElementById('qrFile');
+
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopCamera);
+    qrFile.addEventListener('change', scanUploadedQr);
+    manualForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const code = document.getElementById('manualCode').value.trim();
+      if (code) checkCode(code);
+    });
+    markBtn.addEventListener('click', () => {
+      if (currentCode) markEntry(currentCode);
+    });
+
+    if (window.initialToken) {
+      document.getElementById('manualCode').value = window.initialToken;
+      checkCode(window.initialToken);
+    }
+  }
+
+  function startCamera() {
+    if (!window.Html5Qrcode) {
+      setStatus('Camera library is still loading. Try again in a moment.', 'warn');
+      return;
+    }
+
+    html5QrCode = html5QrCode || new Html5Qrcode('reader');
+    document.getElementById('startBtn').disabled = true;
+    document.getElementById('stopBtn').disabled = false;
+
+    html5QrCode.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: qrboxSize },
+      decodedText => {
+        stopCamera();
+        const code = extractCode(decodedText);
+        document.getElementById('manualCode').value = code;
+        checkCode(code);
+      },
+      () => {}
+    ).catch(error => {
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+      setStatus(
+        'Live camera blocked',
+        'warn',
+        'Use the phone Camera app to scan the QR, take or upload a QR photo here, or enter the Pass ID manually.'
+      );
+    });
+  }
+
+  function stopCamera() {
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    if (html5QrCode && html5QrCode.isScanning) {
+      return html5QrCode.stop();
+    }
+    return Promise.resolve();
+  }
+
+  function qrboxSize(viewfinderWidth, viewfinderHeight) {
+    const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+    const size = Math.floor(minEdge * 0.78);
+    return { width: size, height: size };
+  }
+
+  function extractCode(decodedText) {
+    try {
+      const url = new URL(decodedText);
+      return url.searchParams.get('token') || decodedText;
+    } catch (error) {
+      return decodedText;
+    }
+  }
+
+  function scanUploadedQr(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    if (!window.Html5Qrcode) {
+      setStatus('QR reader is still loading. Try again in a moment.', 'warn');
+      return;
+    }
+
+    setLoading('Reading QR image...');
+    html5QrCode = html5QrCode || new Html5Qrcode('reader');
+    html5QrCode.scanFile(file, true)
+      .then(decodedText => {
+        const code = extractCode(decodedText);
+        document.getElementById('manualCode').value = code;
+        checkCode(code);
+      })
+      .catch(() => {
+        setStatus('Could not read QR photo', 'error', 'Try a clearer close-up photo or enter the Pass ID manually.');
+      })
+      .finally(() => {
+        event.target.value = '';
+      });
+  }
+
+  function checkCode(code) {
+    currentCode = code;
+    setLoading('Checking pass...');
+    google.script.run
+      .withSuccessHandler(result => {
+        renderVerification(result);
+      })
+      .withFailureHandler(error => {
+        setStatus(error.message || String(error), 'error');
+      })
+      .verifyPassForPreview(code);
+  }
+
+  function markEntry(code) {
+    document.getElementById('markBtn').disabled = true;
+    setLoading('Marking entry...');
+    google.script.run
+      .withSuccessHandler(result => {
+        renderVerification(result);
+      })
+      .withFailureHandler(error => {
+        setStatus(error.message || String(error), 'error');
+      })
+      .markAttendance(code);
+  }
+
+  function renderVerification(result) {
+    const record = result.record;
+    const markBtn = document.getElementById('markBtn');
+    if (!record) {
+      markBtn.disabled = true;
+      document.getElementById('details').classList.add('hidden');
+      setStatus(result.message || 'Pass not found.', 'error');
+      return;
+    }
+
+    renderDetails(record);
+    if (result.status === 'ready') {
+      setStatus('Valid pass', 'ready', result.message);
+      markBtn.disabled = false;
+    } else if (result.status === 'entered') {
+      setStatus('Entry marked', 'ready', result.message);
+      markBtn.disabled = true;
+    } else if (result.status === 'already_entered' || result.status === 'duplicate_scan') {
+      setStatus('Already entered', 'warn', result.message);
+      markBtn.disabled = true;
+    } else {
+      setStatus('Cannot verify entry', 'error', result.message);
+      markBtn.disabled = true;
+    }
+  }
+
+  function renderDetails(record) {
+    const details = document.getElementById('details');
+    details.classList.remove('hidden');
+    details.innerHTML = `
+      <dl>
+        <dt>Pass ID</dt><dd>${escapeHtml(record.passId)}</dd>
+        <dt>Parent</dt><dd>${escapeHtml(record.parentName)}</dd>
+        <dt>Student</dt><dd>${escapeHtml(record.studentName)}</dd>
+        <dt>Class</dt><dd>${escapeHtml(record.className)}</dd>
+        <dt>Relation</dt><dd>${escapeHtml(record.relation)}</dd>
+        <dt>Status</dt><dd>${escapeHtml(record.entryStatus || 'Not Entered')}</dd>
+      </dl>
+    `;
+  }
+
+  function setLoading(message) {
+    setStatus(message, 'idle');
+  }
+
+  function setStatus(title, type, message) {
+    const statusCard = document.getElementById('statusCard');
+    statusCard.className = `status-card ${type || 'idle'}`;
+    statusCard.innerHTML = `
+      <p class="eyebrow">Status</p>
+      <h2>${escapeHtml(title)}</h2>
+      <p>${escapeHtml(message || '')}</p>
+    `;
+  }
+
+  function initAdminPage() {
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        activeTab = tab.dataset.tab;
+        document.querySelectorAll('.tab').forEach(item => item.classList.remove('active'));
+        tab.classList.add('active');
+        renderAdminTable();
+      });
+    });
+    document.getElementById('searchInput').addEventListener('input', renderAdminTable);
+    refreshDashboard();
+    setInterval(refreshDashboard, 30000);
+  }
+
+  function refreshDashboard() {
+    google.script.run
+      .withSuccessHandler(data => {
+        adminData = data;
+        renderCounts(data.counts);
+        renderAdminTable();
+      })
+      .withFailureHandler(error => {
+        document.getElementById('tableBody').innerHTML = `<tr><td>${escapeHtml(error.message || String(error))}</td></tr>`;
+      })
+      .getDashboardData();
+  }
+
+  function renderCounts(counts) {
+    document.getElementById('registrationsCount').textContent = counts.registrations;
+    document.getElementById('entriesCount').textContent = counts.entries;
+    document.getElementById('pendingCount').textContent = counts.pending;
+    document.getElementById('duplicateScansCount').textContent = counts.duplicateScans;
+  }
+
+  function renderAdminTable() {
+    if (!adminData) return;
+    const rows = adminData[activeTab] || [];
+    const query = document.getElementById('searchInput').value.trim().toLowerCase();
+    const filtered = rows.filter(row => JSON.stringify(row).toLowerCase().includes(query));
+    const columns = activeTab === 'duplicateScans'
+      ? ['Scan Time', 'Pass ID', 'Parent Name', 'Email', 'Student Name', 'Previous Entry Time', 'Scanned By', 'Reason']
+      : ['passId', 'parentName', 'studentName', 'className', 'relation', 'email', 'phone', 'entryStatus', 'entryTime'];
+
+    document.getElementById('tableHead').innerHTML = `<tr>${columns.map(column => `<th>${labelFor(column)}</th>`).join('')}</tr>`;
+    document.getElementById('tableBody').innerHTML = filtered.length
+      ? filtered.map(row => `<tr>${columns.map(column => renderCell(row, column)).join('')}</tr>`).join('')
+      : `<tr><td colspan="${columns.length}">No records found.</td></tr>`;
+  }
+
+  function renderCell(row, column) {
+    const value = row[column] || '';
+    if (column === 'entryStatus') {
+      const className = value === 'Entered' ? 'entered' : 'pending';
+      return `<td><span class="pill ${className}">${escapeHtml(value || 'Not Entered')}</span></td>`;
+    }
+    return `<td>${escapeHtml(value)}</td>`;
+  }
+
+  function labelFor(value) {
+    return value
+      .replace(/([A-Z])/g, ' $1')
+      .replace(/^./, char => char.toUpperCase());
+  }
+
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+</script>

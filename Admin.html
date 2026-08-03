@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Parent Verification Admin</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">School Annual Fest</p>
+          <h1>Verification Dashboard</h1>
+        </div>
+        <a class="icon-link" href="index.html">Scanner</a>
+      </section>
+
+      <section class="metric-grid">
+        <article class="metric"><span>Registrations</span><strong id="registrationsCount">0</strong></article>
+        <article class="metric"><span>Entries</span><strong id="entriesCount">0</strong></article>
+        <article class="metric"><span>Pending</span><strong id="pendingCount">0</strong></article>
+        <article class="metric warning"><span>Duplicate scans</span><strong id="duplicateScansCount">0</strong></article>
+      </section>
+
+      <section class="toolbar">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="registrations">Registrations</button>
+          <button class="tab" data-tab="entries">Entries</button>
+          <button class="tab" data-tab="pending">Pending</button>
+          <button class="tab" data-tab="duplicateScans">Duplicate scans</button>
+        </div>
+        <input id="searchInput" class="search" placeholder="Search parent, student, pass ID">
+      </section>
+
+      <section class="table-wrap">
+        <table>
+          <thead id="tableHead"></thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </section>
+    </main>
+  </body>
+</html>
