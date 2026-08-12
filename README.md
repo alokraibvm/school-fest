@@ -11,7 +11,7 @@ This project is a complete Google Apps Script based parent verification system. 
 - `JavaScript.html` - shared frontend JavaScript.
 - `appsscript.json` - Apps Script manifest.
 - `index.html` - GitHub Pages scanner frontend with direct camera support.
-- `admin.html` - GitHub Pages admin dashboard frontend.
+- `Admin.html` - GitHub Pages admin dashboard frontend.
 - `styles.css` - GitHub Pages styling.
 - `app.js` - GitHub Pages frontend logic.
 
@@ -41,7 +41,7 @@ The script also recognizes common alternate names like `Guardian Name`, `Mobile 
 7. Copy the web app URL.
 8. For direct mobile camera support, enable GitHub Pages for this repository and use:
    - Scanner: `https://alokraibvm.github.io/School-Fest/`
-   - Admin: `https://alokraibvm.github.io/School-Fest/admin.html`
+   - Admin: `https://alokraibvm.github.io/School-Fest/Admin.html`
 9. In Apps Script, run this once if your GitHub Pages URL is different:
 
 ```js

@@ -10,9 +10,14 @@
   <body>
     <main class="app-shell">
       <section class="topbar">
-        <div>
-          <p class="eyebrow">School Annual Fest</p>
-          <h1>Verification Dashboard</h1>
+        <div class="brand-lockup">
+          <div class="school-logo" aria-hidden="true">
+            <span>SF</span>
+          </div>
+          <div>
+            <p class="eyebrow">School Annual Fest</p>
+            <h1>Verification Dashboard</h1>
+          </div>
         </div>
         <a class="icon-link" href="index.html">Scanner</a>
       </section>
@@ -30,8 +35,13 @@
           <button class="tab" data-tab="entries">Entries</button>
           <button class="tab" data-tab="pending">Pending</button>
           <button class="tab" data-tab="duplicateScans">Duplicate scans</button>
+          <button class="tab" data-tab="attendance">Attendance</button>
         </div>
-        <input id="searchInput" class="search" placeholder="Search parent, student, pass ID">
+        <div class="toolbar-actions">
+          <input id="searchInput" class="search" placeholder="Search parent, student, pass ID">
+          <button id="refreshBtn" class="secondary">Refresh</button>
+          <button id="exportBtn" class="secondary">Download CSV</button>
+        </div>
       </section>
 
       <section class="table-wrap">
@@ -40,6 +50,7 @@
           <tbody id="tableBody"></tbody>
         </table>
       </section>
+      <div id="recordDetails" class="status-card hidden"></div>
     </main>
   </body>
 </html>

@@ -4,6 +4,9 @@ let html5QrCode = null;
 let currentCode = '';
 let adminData = null;
 let activeTab = 'registrations';
+let sortState = { column: '', direction: 'asc' };
+let currentTableRows = [];
+let selectedRecord = null;
 
 window.addEventListener('load', () => {
   if (document.getElementById('reader')) initScannerPage();
@@ -29,6 +32,15 @@ function initScannerPage() {
     if (currentCode) markEntry(currentCode);
   });
 
+  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus(
+      'Camera access unavailable',
+      'error',
+      'Open this page over HTTPS in a browser that supports camera access. Local files and insecure pages cannot use the camera.'
+    );
+    startBtn.disabled = true;
+  }
+
   const initialToken = new URLSearchParams(location.search).get('token') || '';
   if (initialToken) {
     document.getElementById('manualCode').value = initialToken;
@@ -46,21 +58,44 @@ function startCamera() {
   document.getElementById('startBtn').disabled = true;
   document.getElementById('stopBtn').disabled = false;
 
-  html5QrCode.start(
-    { facingMode: 'environment' },
-    { fps: 10, qrbox: qrboxSize },
-    decodedText => {
-      stopCamera();
-      const code = extractCode(decodedText);
-      document.getElementById('manualCode').value = code;
-      checkCode(code);
-    },
-    () => {}
-  ).catch(error => {
-    document.getElementById('startBtn').disabled = false;
-    document.getElementById('stopBtn').disabled = true;
-    setStatus('Camera could not start', 'error', error.message || String(error));
-  });
+  const startWithCamera = cameraId => {
+    const cameraConfig = cameraId ? cameraId : { facingMode: 'environment' };
+    return html5QrCode.start(
+      cameraConfig,
+      { fps: 10, qrbox: qrboxSize },
+      decodedText => {
+        stopCamera();
+        const code = extractCode(decodedText);
+        document.getElementById('manualCode').value = code;
+        checkCode(code);
+      },
+      () => {}
+    );
+  };
+
+  const tryStartCamera = () => {
+    if (Html5Qrcode && Html5Qrcode.getCameras) {
+      Html5Qrcode.getCameras()
+        .then(cameras => {
+          const cameraId = cameras && cameras.length ? cameras[0].id : null;
+          return startWithCamera(cameraId);
+        })
+        .catch(() => startWithCamera(null))
+        .catch(error => {
+          document.getElementById('startBtn').disabled = false;
+          document.getElementById('stopBtn').disabled = true;
+          setStatus('Camera could not start', 'error', error.message || String(error));
+        });
+    } else {
+      startWithCamera(null).catch(error => {
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+        setStatus('Camera could not start', 'error', error.message || String(error));
+      });
+    }
+  };
+
+  tryStartCamera();
 }
 
 function stopCamera() {
@@ -188,10 +223,36 @@ function initAdminPage() {
       activeTab = tab.dataset.tab;
       document.querySelectorAll('.tab').forEach(item => item.classList.remove('active'));
       tab.classList.add('active');
+      sortState = { column: '', direction: 'asc' };
       renderAdminTable();
     });
   });
-  document.getElementById('searchInput').addEventListener('input', renderAdminTable);
+  document.querySelectorAll('.metric[data-tab]').forEach(card => {
+    card.addEventListener('click', () => {
+      activeTab = card.dataset.tab;
+      document.querySelectorAll('.tab').forEach(item => item.classList.remove('active'));
+      const tab = document.querySelector(`.tab[data-tab="${activeTab}"]`);
+      if (tab) tab.classList.add('active');
+      sortState = { column: '', direction: 'asc' };
+      renderAdminTable();
+    });
+  });
+  document.getElementById('searchInput').addEventListener('input', () => {
+    sortState.column = '';
+    renderAdminTable();
+  });
+  document.getElementById('refreshBtn').addEventListener('click', refreshDashboard);
+  document.getElementById('exportBtn').addEventListener('click', exportCurrentTable);
+  document.getElementById('tableHead').addEventListener('click', event => {
+    const headerCell = event.target.closest('th.sortable');
+    if (!headerCell) return;
+    toggleSort(headerCell.dataset.column);
+  });
+  document.getElementById('tableBody').addEventListener('click', event => {
+    const row = event.target.closest('tr');
+    if (!row || row.dataset.index === undefined) return;
+    selectRecord(currentTableRows[Number(row.dataset.index)]);
+  });
   refreshDashboard();
   setInterval(refreshDashboard, 30000);
 }
@@ -222,12 +283,100 @@ function renderAdminTable() {
   const filtered = rows.filter(row => JSON.stringify(row).toLowerCase().includes(query));
   const columns = activeTab === 'duplicateScans'
     ? ['Scan Time', 'Pass ID', 'Parent Name', 'Email', 'Student Name', 'Previous Entry Time', 'Scanned By', 'Reason']
-    : ['passId', 'parentName', 'studentName', 'className', 'relation', 'email', 'phone', 'entryStatus', 'entryTime'];
+    : activeTab === 'attendance'
+      ? ['Entry Time', 'Pass ID', 'Parent Name', 'Email', 'Phone', 'Student Name', 'Class', 'Relation', 'Scanned By']
+      : ['passId', 'parentName', 'studentName', 'className', 'relation', 'email', 'phone', 'entryStatus', 'entryTime'];
 
-  document.getElementById('tableHead').innerHTML = `<tr>${columns.map(column => `<th>${labelFor(column)}</th>`).join('')}</tr>`;
-  document.getElementById('tableBody').innerHTML = filtered.length
-    ? filtered.map(row => `<tr>${columns.map(column => renderCell(row, column)).join('')}</tr>`).join('')
+  currentTableRows = sortTableRows(filtered);
+
+  document.getElementById('tableHead').innerHTML = `
+    <tr>${columns.map(column => `
+      <th class="sortable" data-column="${column}">
+        ${labelFor(column)}${sortState.column === column ? ` <span class="sort-arrow">${sortState.direction === 'asc' ? '▲' : '▼'}</span>` : ''}
+      </th>
+    `).join('')}</tr>`;
+
+  document.getElementById('tableBody').innerHTML = currentTableRows.length
+    ? currentTableRows.map((row, index) => `<tr data-index="${index}" class="clickable-row">${columns.map(column => renderCell(row, column)).join('')}</tr>`).join('')
     : `<tr><td colspan="${columns.length}">No records found.</td></tr>`;
+
+  if (!selectedRecord || !currentTableRows.includes(selectedRecord)) {
+    selectRecord(currentTableRows[0] || null);
+  }
+}
+
+function sortTableRows(rows) {
+  if (!sortState.column) return rows.slice();
+  return rows.slice().sort((a, b) => {
+    const aValue = normalizeSortValue(a[sortState.column]);
+    const bValue = normalizeSortValue(b[sortState.column]);
+    if (aValue < bValue) return sortState.direction === 'asc' ? -1 : 1;
+    if (aValue > bValue) return sortState.direction === 'asc' ? 1 : -1;
+    return 0;
+  });
+}
+
+function normalizeSortValue(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function toggleSort(column) {
+  if (sortState.column === column) {
+    sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortState.column = column;
+    sortState.direction = 'asc';
+  }
+  renderAdminTable();
+}
+
+function selectRecord(record) {
+  selectedRecord = record;
+  const details = document.getElementById('recordDetails');
+  if (!record) {
+    details.classList.add('hidden');
+    details.innerHTML = '';
+    return;
+  }
+
+  details.classList.remove('hidden');
+  details.innerHTML = `
+    <div class="details-card">
+      <p class="eyebrow">Selected record</p>
+      ${Object.entries(record).map(([key, value]) => `
+        <div class="detail-line">
+          <strong>${labelFor(key)}</strong>
+          <span>${escapeHtml(value)}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function exportCurrentTable() {
+  if (!currentTableRows.length) return;
+  const columns = activeTab === 'duplicateScans'
+    ? ['Scan Time', 'Pass ID', 'Parent Name', 'Email', 'Student Name', 'Previous Entry Time', 'Scanned By', 'Reason']
+    : activeTab === 'attendance'
+      ? ['Entry Time', 'Pass ID', 'Parent Name', 'Email', 'Phone', 'Student Name', 'Class', 'Relation', 'Scanned By']
+      : ['passId', 'parentName', 'studentName', 'className', 'relation', 'whatsappNumber', 'email', 'phone', 'entryStatus', 'entryTime'];
+
+  const csvRows = [
+    columns.join(','),
+    ...currentTableRows.map(row => columns.map(column => quoteCsv(row[column] || '')).join(','))
+  ];
+
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `${activeTab || 'table'}-export.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function quoteCsv(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
 }
 
 function renderCell(row, column) {

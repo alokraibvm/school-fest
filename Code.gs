@@ -7,6 +7,7 @@ const CONFIG = {
   EVENT_NAME: 'Annual Fest Parent Entry Pass',
   PASS_PREFIX: 'AF',
   TIMEZONE: 'Asia/Kolkata',
+  DEFAULT_COUNTRY_CODE: '91',
   GITHUB_PAGES_URL: 'https://alokraibvm.github.io/School-Fest/'
 };
 
@@ -18,6 +19,7 @@ const PASS_HEADERS = [
   'Parent Name',
   'Email',
   'Phone',
+  'WhatsApp Number',
   'Student Name',
   'Class',
   'Relation',
@@ -149,6 +151,7 @@ function createRegistrationForm() {
   form.addTextItem().setTitle('Parent Name').setRequired(true);
   form.addTextItem().setTitle('Email Address').setRequired(true);
   form.addTextItem().setTitle('Phone Number').setRequired(true);
+  form.addTextItem().setTitle('WhatsApp Number');
   form.addTextItem().setTitle('Student Name').setRequired(true);
   form.addTextItem().setTitle('Class/Section').setRequired(true);
   form.addListItem()
@@ -201,12 +204,12 @@ function onFormSubmit(e) {
       parent.parentName,
       parent.email,
       parent.phone,
+      parent.whatsappNumber,
       parent.studentName,
       parent.className,
       parent.relation,
       'Duplicate',
       'Not Entered',
-      '',
       `Duplicate of ${duplicate.passId}`,
       sourceRow
     ];
@@ -226,6 +229,7 @@ function onFormSubmit(e) {
     parent.parentName,
     parent.email,
     parent.phone,
+    parent.whatsappNumber,
     parent.studentName,
     parent.className,
     parent.relation,
@@ -359,6 +363,7 @@ function normalizeParent_(valuesByHeader) {
     parentName: pickValue_(valuesByHeader, ['Parent Name', 'Father Name', 'Mother Name', 'Guardian Name', 'Name']),
     email: normalizeEmail_(pickValue_(valuesByHeader, ['Email Address', 'Email', 'Parent Email', 'Guardian Email'])),
     phone: normalizePhone_(pickValue_(valuesByHeader, ['Phone Number', 'Mobile Number', 'Contact Number', 'Parent Phone', 'Guardian Phone'])),
+    whatsappNumber: normalizePhone_(pickValue_(valuesByHeader, ['WhatsApp Number', 'Whatsapp Number', 'WA Number', 'WhatsApp', 'WhatsApp Contact'])) || normalizePhone_(pickValue_(valuesByHeader, ['Phone Number', 'Mobile Number', 'Contact Number', 'Parent Phone', 'Guardian Phone'])),
     studentName: pickValue_(valuesByHeader, ['Student Name', 'Child Name', 'Ward Name']),
     className: pickValue_(valuesByHeader, ['Class', 'Class/Section', 'Grade', 'Section']),
     relation: pickValue_(valuesByHeader, ['Relation', 'Relationship', 'Relation with Student'])
@@ -434,37 +439,55 @@ function buildQrImageUrl_(token) {
   return `https://quickchart.io/qr?text=${encodeURIComponent(scannerUrl)}&size=500&margin=2`;
 }
 
+function buildWhatsappUrl_(rawNumber, scannerUrl, qrUrl) {
+  const phone = formatWhatsappPhone_(rawNumber);
+  if (!phone) return '';
+  const text = encodeURIComponent(
+    `${CONFIG.EVENT_NAME} entry pass:\n${scannerUrl}\n\nQR image: ${qrUrl}\n\nDo not forward or download this pass.`
+  );
+  return `https://api.whatsapp.com/send?phone=${phone}&text=${text}`;
+}
+
+function formatWhatsappPhone_(rawNumber) {
+  const digits = String(rawNumber || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length === 10) return `${CONFIG.DEFAULT_COUNTRY_CODE}${digits}`;
+  if (digits.length > 10 && digits.startsWith('0')) return digits.slice(1);
+  return digits;
+}
+
 function sendPassEmail_(parent, passId, token, qrUrl) {
   const scannerUrl = buildFrontendScannerUrl_(token);
+  const whatsappLink = parent.whatsappNumber ? buildWhatsappUrl_(parent.whatsappNumber, scannerUrl, qrUrl) : '';
   const subject = `${CONFIG.EVENT_NAME}: ${passId}`;
-  const body = [
+  const bodyLines = [
     `Dear ${parent.parentName || 'Parent'},`,
     '',
     `Your ${CONFIG.SCHOOL_NAME} entry pass is ready.`,
     `Pass ID: ${passId}`,
     `Student: ${parent.studentName}`,
     '',
-    `Open this link or show the attached QR code at the entry gate:`,
+    `Open the pass link below or show the QR code at the entry gate:`,
     scannerUrl,
-    '',
-    'Regards,',
-    CONFIG.SCHOOL_NAME
-  ].join('\n');
+    ''
+  ];
 
-  let attachments = [];
-  try {
-    const qrBlob = UrlFetchApp.fetch(qrUrl).getBlob().setName(`${passId}-qr.png`);
-    attachments = [qrBlob];
-  } catch (err) {
-    console.warn(`QR attachment failed for ${passId}: ${err.message}`);
+  if (whatsappLink) {
+    bodyLines.push('You can also open this pass through WhatsApp using the link below:');
+    bodyLines.push(whatsappLink);
+    bodyLines.push('');
   }
+
+  bodyLines.push('Important: Do not forward or download this pass. It is valid only for the registered parent.');
+  bodyLines.push('');
+  bodyLines.push('Regards,');
+  bodyLines.push(CONFIG.SCHOOL_NAME);
 
   MailApp.sendEmail({
     to: parent.email,
     subject,
-    body,
-    htmlBody: buildPassEmailHtml_(parent, passId, scannerUrl, qrUrl),
-    attachments
+    body: bodyLines.join('\n'),
+    htmlBody: buildPassEmailHtml_(parent, passId, scannerUrl, qrUrl, whatsappLink)
   });
 }
 
@@ -476,7 +499,7 @@ function sendDuplicateRegistrationEmail_(parent, passId) {
   });
 }
 
-function buildPassEmailHtml_(parent, passId, scannerUrl, qrUrl) {
+function buildPassEmailHtml_(parent, passId, scannerUrl, qrUrl, whatsappLink) {
   return `
     <div style="font-family:Arial,sans-serif;line-height:1.5;color:#172033">
       <h2 style="margin:0 0 8px">${CONFIG.EVENT_NAME}</h2>
@@ -487,8 +510,10 @@ function buildPassEmailHtml_(parent, passId, scannerUrl, qrUrl) {
         <tr><td><b>Student</b></td><td>${escapeHtml_(parent.studentName)}</td></tr>
         <tr><td><b>Class</b></td><td>${escapeHtml_(parent.className)}</td></tr>
       </table>
-      <p><img src="${qrUrl}" alt="QR Code" width="220" height="220"></p>
-      <p><a href="${scannerUrl}">Open digital pass</a></p>
+      <p style="margin:18px 0;">Open the digital pass using this link:</p>
+      <p><a href="${scannerUrl}" style="display:inline-block;padding:12px 18px;background:#0d5c9e;color:#fff;border-radius:8px;text-decoration:none;">Open digital pass</a></p>
+      ${whatsappLink ? `<p><a href="${whatsappLink}" style="display:inline-block;padding:12px 18px;background:#25D366;color:#fff;border-radius:8px;text-decoration:none;">Open in WhatsApp</a></p>` : ''}
+      <p style="margin-top:16px;color:#555;font-size:0.95rem;">Important: Do not forward or download this pass. It is valid only for the registered parent.</p>
       <p>Regards,<br>${CONFIG.SCHOOL_NAME}</p>
     </div>
   `;
@@ -510,6 +535,7 @@ function getPassRecords_() {
     parentName: row['Parent Name'],
     email: row.Email,
     phone: row.Phone,
+    whatsappNumber: row['WhatsApp Number'],
     studentName: row['Student Name'],
     className: row.Class,
     relation: row.Relation,
@@ -543,6 +569,7 @@ function publicRecord_(record) {
     parentName: record.parentName,
     email: record.email,
     phone: record.phone,
+    whatsappNumber: record.whatsappNumber,
     studentName: record.studentName,
     className: record.className,
     relation: record.relation,
