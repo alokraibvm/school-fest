@@ -75,3 +75,60 @@ The system treats a scan as duplicate when:
 - The QR token is signed with a script-level secret stored in Apps Script Properties.
 - Keep the Apps Script project bound to the response spreadsheet.
 - If your form uses different question names, update the aliases in `normalizeParent_()` inside `Code.gs`.
+
+## Changes in this copy
+
+- QR codes now contain only the Pass ID (for privacy). New passes will embed only values like `AF-2026-00001` inside the QR. The system still accepts already-issued token-based QR images.
+- The `Parent Passes` sheet now records `Email Status` and `WhatsApp Status` for each pass to help track delivery.
+
+## WhatsApp integrations
+
+This project supports sending WhatsApp notifications via Twilio (already included) and can be adapted to the official WhatsApp Business Cloud API. Do NOT hard-code API secrets in client-side code — store them in Apps Script Properties.
+
+To configure Twilio (current implementation):
+
+1. In Apps Script, open `Project Settings > Script properties` and add the following keys, or run `setTwilioConfig(accountSid, authToken, fromWhatsappNumber)` from the script editor:
+
+   - `TWILIO_ACCOUNT_SID` — your Twilio Account SID
+   - `TWILIO_AUTH_TOKEN` — your Twilio Auth Token
+   - `TWILIO_FROM_WHATSAPP` — the WhatsApp-enabled Twilio number (in international format, e.g. +1415xxxxxxx)
+   - `TWILIO_FROM_SMS` — (optional) the Twilio phone number for SMS/MMS (in E.164 format). If not set, `TWILIO_FROM_WHATSAPP` will be used as a fallback where appropriate.
+
+2. Optionally run `verifyTwilioConfig('+91XXXXXXXXXX')` to send a test WhatsApp message.
+
+To use the official WhatsApp Business Cloud API instead:
+
+- You'll need your WhatsApp Business `phone_number_id` and a `Bearer` access token from Meta. Store them in Script Properties (do not commit them).
+- Implement a small Apps Script function that calls `https://graph.facebook.com/v17.0/<PHONE_NUMBER_ID>/messages` with the proper payload and Authorization header `Bearer <TOKEN>`.
+This repository includes a ready-to-configure WhatsApp Business Cloud API helper.
+
+Configuration keys (Script Properties) or use `setWhatsAppCloudConfig(phoneNumberId, accessToken)`:
+
+- `WHATSAPP_PHONE_NUMBER_ID` — the phone number id from your Meta Business account
+- `WHATSAPP_ACCESS_TOKEN` — the bearer access token (store securely)
+
+## SMS via Twilio
+
+This project can also send the Pass ID and QR link via SMS/MMS using Twilio. Configure the Twilio credentials as above and set `TWILIO_FROM_SMS` to a Twilio phone number enabled for SMS. The script will attempt to send an SMS after sending the email and will record `SMS Status` in the `Parent Passes` sheet.
+
+SMS messages are plain text and include the Pass ID and a link to open the digital pass. If you prefer to send the QR image itself as MMS, the script will include the QR image URL as `MediaUrl` when Twilio supports MMS for your number and destination.
+
+After configuring, you can run `verifyWhatsAppCloudConfig(testPhoneNumber)` from the Apps Script editor to send a test message.
+
+Example Cloud API payload sent by the helper (text message):
+
+POST https://graph.facebook.com/v17.0/<PHONE_NUMBER_ID>/messages
+Headers:
+- Authorization: Bearer <WHATSAPP_ACCESS_TOKEN>
+- Content-Type: application/json
+
+Body:
+
+```json
+{
+   "messaging_product": "whatsapp",
+   "to": "9198xxxxxxx",
+   "type": "text",
+   "text": { "body": "Your pass AF-2026-00001 is ready" }
+}
+```

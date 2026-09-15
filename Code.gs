@@ -28,6 +28,7 @@ const PASS_HEADERS = [
   'Entry Time',
   'Duplicate Reason',
   'Source Response Row'
+  , 'Email Status', 'WhatsApp Status', 'SMS Status'
 ];
 
 const ATTENDANCE_HEADERS = [
@@ -126,6 +127,148 @@ function setGithubPagesUrl(url) {
   };
 }
 
+function setTwilioConfig(accountSid, authToken, fromWhatsappNumber) {
+  if (!accountSid || !authToken || !fromWhatsappNumber) {
+    throw new Error('Provide Twilio account SID, auth token, and the WhatsApp from number.');
+  }
+  PropertiesService.getScriptProperties().setProperties({
+    TWILIO_ACCOUNT_SID: String(accountSid).trim(),
+    TWILIO_AUTH_TOKEN: String(authToken).trim(),
+    TWILIO_FROM_WHATSAPP: String(fromWhatsappNumber).trim()
+  });
+  return { ok: true, message: 'Twilio WhatsApp configuration saved.' };
+}
+
+function getTwilioConfig_() {
+  return {
+    accountSid: PropertiesService.getScriptProperties().getProperty('TWILIO_ACCOUNT_SID') || '',
+    authToken: PropertiesService.getScriptProperties().getProperty('TWILIO_AUTH_TOKEN') || '',
+    fromNumber: PropertiesService.getScriptProperties().getProperty('TWILIO_FROM_WHATSAPP') || '',
+    fromSms: PropertiesService.getScriptProperties().getProperty('TWILIO_FROM_SMS') || PropertiesService.getScriptProperties().getProperty('TWILIO_FROM_WHATSAPP') || ''
+  };
+}
+
+function isTwilioConfigured_() {
+  const config = getTwilioConfig_();
+  return Boolean(config.accountSid && config.authToken && config.fromNumber);
+}
+
+function verifyTwilioConfig(testPhoneNumber) {
+  const config = getTwilioConfig_();
+  if (!config.accountSid || !config.authToken || !config.fromNumber) {
+    return {
+      ok: false,
+      message: 'Twilio config is incomplete. Run setTwilioConfig() with account SID, auth token, and WhatsApp sender number.'
+    };
+  }
+
+  if (!testPhoneNumber) {
+    return {
+      ok: true,
+      message: 'Twilio config is valid. Provide a phone number to send a test WhatsApp message if you want.',
+      config: {
+        from: config.fromNumber,
+        accountSid: config.accountSid ? 'configured' : 'missing',
+        authToken: config.authToken ? 'configured' : 'missing'
+      }
+    };
+  }
+
+  const testMessage = `Twilio WhatsApp configuration is working for ${CONFIG.SCHOOL_NAME}.`;
+  const result = sendWhatsAppMessage_(testPhoneNumber, testMessage, '', config);
+  return {
+    ok: true,
+    message: 'Test WhatsApp message sent successfully.',
+    result
+  };
+}
+
+function setWhatsAppCloudConfig(phoneNumberId, accessToken) {
+  if (!phoneNumberId || !accessToken) {
+    throw new Error('Provide WhatsApp phone number id and access token.');
+  }
+  PropertiesService.getScriptProperties().setProperties({
+    WHATSAPP_PHONE_NUMBER_ID: String(phoneNumberId).trim(),
+    WHATSAPP_ACCESS_TOKEN: String(accessToken).trim()
+  });
+  return { ok: true, message: 'WhatsApp Cloud configuration saved.' };
+}
+
+function getWhatsAppCloudConfig_() {
+  return {
+    phoneNumberId: PropertiesService.getScriptProperties().getProperty('WHATSAPP_PHONE_NUMBER_ID') || '',
+    accessToken: PropertiesService.getScriptProperties().getProperty('WHATSAPP_ACCESS_TOKEN') || ''
+  };
+}
+
+function isWhatsAppCloudConfigured_() {
+  const cfg = getWhatsAppCloudConfig_();
+  return Boolean(cfg.phoneNumberId && cfg.accessToken);
+}
+
+function verifyWhatsAppCloudConfig(testPhoneNumber) {
+  const cfg = getWhatsAppCloudConfig_();
+  if (!cfg.phoneNumberId || !cfg.accessToken) {
+    return { ok: false, message: 'WhatsApp Cloud config is incomplete. Run setWhatsAppCloudConfig() with phoneNumberId and accessToken.' };
+  }
+  if (!testPhoneNumber) {
+    return { ok: true, message: 'WhatsApp Cloud config looks set. Provide a phone number to send a test message if you want.' };
+  }
+  const msg = `WhatsApp Cloud configuration test for ${CONFIG.SCHOOL_NAME}.`;
+  const result = sendWhatsAppCloudMessage_(testPhoneNumber, msg, '', cfg);
+  return { ok: true, message: 'Test message sent', result };
+}
+
+function sendWhatsAppCloudMessage_(rawNumber, body, mediaUrl, config) {
+  const cfg = config || getWhatsAppCloudConfig_();
+  if (!cfg.phoneNumberId || !cfg.accessToken) {
+    throw new Error('WhatsApp Cloud config is missing');
+  }
+  const phone = formatWhatsappPhone_(rawNumber);
+  if (!phone) throw new Error('Invalid WhatsApp number');
+
+  const endpoint = `https://graph.facebook.com/v17.0/${cfg.phoneNumberId}/messages`;
+  const headers = {
+    Authorization: `Bearer ${cfg.accessToken}`,
+    'Content-Type': 'application/json'
+  };
+
+  let payload;
+  if (mediaUrl) {
+    payload = {
+      messaging_product: 'whatsapp',
+      to: phone,
+      type: 'image',
+      image: { link: mediaUrl, caption: body }
+    };
+  } else {
+    payload = {
+      messaging_product: 'whatsapp',
+      to: phone,
+      type: 'text',
+      text: { body: body }
+    };
+  }
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    headers: headers,
+    muteHttpExceptions: true
+  };
+
+  const response = UrlFetchApp.fetch(endpoint, options);
+  const status = response.getResponseCode();
+  const text = response.getContentText();
+  let data;
+  try { data = JSON.parse(text); } catch (err) { throw new Error('WhatsApp Cloud API returned non-JSON response: ' + text); }
+  if (status < 200 || status >= 300) {
+    throw new Error(`WhatsApp Cloud send failed: ${data.error ? data.error.message : text}`);
+  }
+  return data;
+}
+
 function setupSystem() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   ensureSheet_(ss, CONFIG.PASS_SHEET, PASS_HEADERS);
@@ -210,17 +353,43 @@ function onFormSubmit(e) {
       parent.relation,
       'Duplicate',
       'Not Entered',
+      '',
       `Duplicate of ${duplicate.passId}`,
-      sourceRow
+      sourceRow,
+      '', '', ''
     ];
     passSheet.appendRow(duplicateRow);
-    sendDuplicateRegistrationEmail_(parent, duplicate.passId);
+    const newRow = passSheet.getLastRow();
+    let emailStatus = 'Not Sent';
+    let whatsappStatus = 'Not Sent';
+    let smsStatus = 'Not Sent';
+    try {
+      sendDuplicateRegistrationEmail_(parent, duplicate.passId);
+      emailStatus = 'Sent';
+    } catch (err) {
+      emailStatus = 'Failed: ' + (err.message || String(err));
+    }
+    // Attempt SMS for duplicate notification if phone present and Twilio configured
+    try {
+      const config = getTwilioConfig_();
+      if (parent.phone && config.accountSid && config.authToken && config.fromSms) {
+        const smsResult = sendSmsViaTwilio_(parent.phone, `Duplicate registration: existing pass ${duplicate.passId}`, '', config);
+        smsStatus = smsResult.sid ? 'Sent' : 'Sent';
+      } else {
+        smsStatus = parent.phone ? 'Not configured' : 'No Phone';
+      }
+    } catch (err) {
+      smsStatus = 'Failed: ' + (err.message || String(err));
+    }
+    passSheet.getRange(newRow, PASS_HEADERS.indexOf('Email Status') + 1).setValue(emailStatus);
+    passSheet.getRange(newRow, PASS_HEADERS.indexOf('WhatsApp Status') + 1).setValue(whatsappStatus);
+    passSheet.getRange(newRow, PASS_HEADERS.indexOf('SMS Status') + 1).setValue(smsStatus);
     return { ok: false, duplicate: true, passId: duplicate.passId };
   }
 
   const passId = generatePassId_();
   const token = createQrToken_(passId);
-  const qrUrl = buildQrImageUrl_(token);
+  const qrUrl = buildQrImageUrl_(passId);
   const row = [
     new Date(),
     passId,
@@ -237,10 +406,30 @@ function onFormSubmit(e) {
     'Not Entered',
     '',
     '',
-    sourceRow
+    sourceRow,
+    '', '', ''
   ];
   passSheet.appendRow(row);
-  sendPassEmail_(parent, passId, token, qrUrl);
+  const newRow = passSheet.getLastRow();
+  let emailStatus = 'Not Sent';
+  let whatsappStatus = 'Not Sent';
+  let smsStatus = 'Not Sent';
+  try {
+    const sendResult = sendPassEmail_(parent, passId, token, qrUrl) || {};
+    emailStatus = sendResult.emailStatus || 'Sent';
+    whatsappStatus = sendResult.whatsappStatus || (parent.whatsappNumber ? 'Attempted' : 'No WhatsApp');
+    smsStatus = sendResult.smsStatus || (parent.phone ? 'Attempted' : 'No Phone');
+  } catch (err) {
+    emailStatus = 'Failed: ' + (err.message || String(err));
+  }
+  try {
+    passSheet.getRange(newRow, PASS_HEADERS.indexOf('Email Status') + 1).setValue(emailStatus);
+    passSheet.getRange(newRow, PASS_HEADERS.indexOf('WhatsApp Status') + 1).setValue(whatsappStatus);
+    passSheet.getRange(newRow, PASS_HEADERS.indexOf('SMS Status') + 1).setValue(smsStatus || (parent.phone ? 'Not Sent' : 'No Phone'));
+  } catch (err) {
+    // ignore sheet write errors
+  }
+
   return { ok: true, passId };
 }
 
@@ -361,9 +550,9 @@ function getSubmittedValues_(e) {
 function normalizeParent_(valuesByHeader) {
   return {
     parentName: pickValue_(valuesByHeader, ['Parent Name', 'Father Name', 'Mother Name', 'Guardian Name', 'Name']),
-    email: normalizeEmail_(pickValue_(valuesByHeader, ['Email Address', 'Email', 'Parent Email', 'Guardian Email'])),
+    email: normalizeEmail_(pickValue_(valuesByHeader, ['Email Address', 'Email', 'E-mail', 'Email ID', 'Parent Email', 'Guardian Email'])),
     phone: normalizePhone_(pickValue_(valuesByHeader, ['Phone Number', 'Mobile Number', 'Contact Number', 'Parent Phone', 'Guardian Phone'])),
-    whatsappNumber: normalizePhone_(pickValue_(valuesByHeader, ['WhatsApp Number', 'Whatsapp Number', 'WA Number', 'WhatsApp', 'WhatsApp Contact'])) || normalizePhone_(pickValue_(valuesByHeader, ['Phone Number', 'Mobile Number', 'Contact Number', 'Parent Phone', 'Guardian Phone'])),
+    whatsappNumber: normalizePhone_(pickValue_(valuesByHeader, ['WhatsApp Number', 'Whatsapp Number', 'WhatsApp No', 'WhatsApp', 'WhatsApp Contact', 'WA Number', 'WhatsApp ID'])) || normalizePhone_(pickValue_(valuesByHeader, ['Phone Number', 'Mobile Number', 'Contact Number', 'Parent Phone', 'Guardian Phone'])),
     studentName: pickValue_(valuesByHeader, ['Student Name', 'Child Name', 'Ward Name']),
     className: pickValue_(valuesByHeader, ['Class', 'Class/Section', 'Grade', 'Section']),
     relation: pickValue_(valuesByHeader, ['Relation', 'Relationship', 'Relation with Student'])
@@ -435,8 +624,17 @@ function getPassIdFromToken_(tokenOrPassId) {
 }
 
 function buildQrImageUrl_(token) {
-  const scannerUrl = buildFrontendScannerUrl_(token);
-  return `https://quickchart.io/qr?text=${encodeURIComponent(scannerUrl)}&size=500&margin=2`;
+  // For privacy, QR codes should contain only the Pass ID (e.g. AF-2026-00001).
+  // The function accepts either a token or a passId; if the input looks like a token,
+  // attempt to decode to passId, otherwise use the value directly.
+  const raw = String(token || '').trim();
+  let passId = raw;
+  if (!raw.startsWith(CONFIG.PASS_PREFIX + '-')) {
+    // try to decode token -> passId
+    const decoded = getPassIdFromToken_(raw);
+    if (decoded) passId = decoded;
+  }
+  return `https://quickchart.io/qr?text=${encodeURIComponent(passId)}&size=500&margin=2`;
 }
 
 function buildWhatsappUrl_(rawNumber, scannerUrl, qrUrl) {
@@ -469,6 +667,8 @@ function sendPassEmail_(parent, passId, token, qrUrl) {
     '',
     `Open the pass link below or show the QR code at the entry gate:`,
     scannerUrl,
+    '',
+    `QR image: ${qrUrl}`,
     ''
   ];
 
@@ -483,12 +683,68 @@ function sendPassEmail_(parent, passId, token, qrUrl) {
   bodyLines.push('Regards,');
   bodyLines.push(CONFIG.SCHOOL_NAME);
 
-  MailApp.sendEmail({
-    to: parent.email,
-    subject,
-    body: bodyLines.join('\n'),
-    htmlBody: buildPassEmailHtml_(parent, passId, scannerUrl, qrUrl, whatsappLink)
-  });
+  let emailStatus = 'Sent';
+  let whatsappStatus = 'Not Sent';
+  try {
+    MailApp.sendEmail({
+      to: parent.email,
+      subject,
+      body: bodyLines.join('\n'),
+      htmlBody: buildPassEmailHtml_(parent, passId, scannerUrl, qrUrl, whatsappLink)
+    });
+    emailStatus = 'Sent';
+  } catch (err) {
+    emailStatus = 'Failed: ' + (err.message || String(err));
+    Logger.log('Email send failed: %s', err.message || err);
+  }
+
+  if (parent.whatsappNumber) {
+    if (isTwilioConfigured_()) {
+      try {
+        sendPassWhatsappNotification_(parent, passId, scannerUrl, qrUrl);
+        whatsappStatus = 'Sent (Twilio)';
+      } catch (err) {
+        whatsappStatus = 'Failed (Twilio): ' + (err.message || String(err));
+        Logger.log('WhatsApp notification failed: %s', err.message || err);
+      }
+    } else if (isWhatsAppCloudConfigured_()) {
+      try {
+        sendWhatsAppCloudMessage_(parent.whatsappNumber, buildWhatsAppMessageText_(passId, scannerUrl, qrUrl), qrUrl);
+        whatsappStatus = 'Sent (Cloud)';
+      } catch (err) {
+        whatsappStatus = 'Failed (Cloud): ' + (err.message || String(err));
+        Logger.log('WhatsApp Cloud notification failed: %s', err.message || err);
+      }
+    } else {
+      whatsappStatus = 'Not configured';
+    }
+  } else {
+    whatsappStatus = 'No WhatsApp';
+  }
+  // Attempt SMS delivery via Twilio if possible
+  let smsStatus = 'Not Sent';
+  try {
+    const twConfig = getTwilioConfig_();
+    if (parent.phone) {
+      if (twConfig.accountSid && twConfig.authToken && twConfig.fromSms) {
+        try {
+          sendSmsViaTwilio_(parent.phone, `${CONFIG.EVENT_NAME} pass: ${passId}\nOpen: ${scannerUrl}`, qrUrl, twConfig);
+          smsStatus = 'Sent (Twilio)';
+        } catch (err) {
+          smsStatus = 'Failed (Twilio): ' + (err.message || String(err));
+          Logger.log('SMS send failed: %s', err.message || err);
+        }
+      } else {
+        smsStatus = 'Not configured';
+      }
+    } else {
+      smsStatus = 'No Phone';
+    }
+  } catch (err) {
+    smsStatus = 'Failed: ' + (err.message || String(err));
+  }
+
+  return { emailStatus, whatsappStatus, smsStatus };
 }
 
 function sendDuplicateRegistrationEmail_(parent, passId) {
@@ -497,6 +753,76 @@ function sendDuplicateRegistrationEmail_(parent, passId) {
     subject: `${CONFIG.EVENT_NAME}: duplicate registration`,
     body: `Dear ${parent.parentName || 'Parent'},\n\nA pass is already registered for these details.\nExisting Pass ID: ${passId}\n\nRegards,\n${CONFIG.SCHOOL_NAME}`
   });
+}
+
+function resendPassById(passId) {
+  const record = getPassRecords_().find(item => item.passId === String(passId || '').trim());
+  if (!record) {
+    throw new Error('Pass ID not found.');
+  }
+  if (record.registrationStatus !== 'Registered') {
+    throw new Error('Only registered passes can be sent.');
+  }
+  return resendPassRecord_(record);
+}
+
+function resendUnsentPasses() {
+  const records = getPassRecords_().filter(record => {
+    if (record.registrationStatus !== 'Registered') return false;
+    const emailStatus = String(record.emailStatus || '').toLowerCase();
+    const whatsappStatus = String(record.whatsappStatus || '').toLowerCase();
+    return !emailStatus || emailStatus.startsWith('failed') || !whatsappStatus || whatsappStatus.startsWith('failed') || whatsappStatus === 'not configured';
+  });
+
+  return records.map(record => {
+    try {
+      return resendPassRecord_(record);
+    } catch (err) {
+      return {
+        ok: false,
+        passId: record.passId,
+        message: err.message || String(err)
+      };
+    }
+  });
+}
+
+function resendPassRecord_(record) {
+  const parent = {
+    parentName: record.parentName,
+    email: record.email,
+    phone: record.phone,
+    whatsappNumber: record.whatsappNumber || record.phone,
+    studentName: record.studentName,
+    className: record.className,
+    relation: record.relation
+  };
+  if (!parent.email) {
+    throw new Error('Parent email is missing.');
+  }
+
+  const token = record.qrToken || createQrToken_(record.passId);
+  const qrUrl = record.qrImageUrl || buildQrImageUrl_(record.passId);
+  const result = sendPassEmail_(parent, record.passId, token, qrUrl);
+  const passSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.PASS_SHEET);
+
+  if (!record.qrToken) {
+    passSheet.getRange(record.rowNumber, PASS_HEADERS.indexOf('QR Token') + 1).setValue(token);
+  }
+  if (!record.qrImageUrl) {
+    passSheet.getRange(record.rowNumber, PASS_HEADERS.indexOf('QR Image URL') + 1).setValue(qrUrl);
+  }
+  passSheet.getRange(record.rowNumber, PASS_HEADERS.indexOf('Email Status') + 1).setValue(result.emailStatus);
+  passSheet.getRange(record.rowNumber, PASS_HEADERS.indexOf('WhatsApp Status') + 1).setValue(result.whatsappStatus);
+  passSheet.getRange(record.rowNumber, PASS_HEADERS.indexOf('SMS Status') + 1).setValue(result.smsStatus);
+
+  return {
+    ok: true,
+    passId: record.passId,
+    emailStatus: result.emailStatus,
+    whatsappStatus: result.whatsappStatus,
+    smsStatus: result.smsStatus
+  };
 }
 
 function buildPassEmailHtml_(parent, passId, scannerUrl, qrUrl, whatsappLink) {
@@ -512,11 +838,110 @@ function buildPassEmailHtml_(parent, passId, scannerUrl, qrUrl, whatsappLink) {
       </table>
       <p style="margin:18px 0;">Open the digital pass using this link:</p>
       <p><a href="${scannerUrl}" style="display:inline-block;padding:12px 18px;background:#0d5c9e;color:#fff;border-radius:8px;text-decoration:none;">Open digital pass</a></p>
+      <p style="margin:18px 0;">Or scan the QR code below:</p>
+      <p><img src="${qrUrl}" alt="QR code pass" style="max-width:100%;height:auto;border:1px solid #ddd;border-radius:8px;"></p>
       ${whatsappLink ? `<p><a href="${whatsappLink}" style="display:inline-block;padding:12px 18px;background:#25D366;color:#fff;border-radius:8px;text-decoration:none;">Open in WhatsApp</a></p>` : ''}
       <p style="margin-top:16px;color:#555;font-size:0.95rem;">Important: Do not forward or download this pass. It is valid only for the registered parent.</p>
       <p>Regards,<br>${CONFIG.SCHOOL_NAME}</p>
     </div>
   `;
+}
+
+function buildWhatsAppMessageText_(passId, scannerUrl, qrUrl) {
+  return `${CONFIG.EVENT_NAME} entry pass\n\nPass ID: ${passId}\nOpen pass: ${scannerUrl}\n\nQR image: ${qrUrl}\n\nDo not forward or download this pass.`;
+}
+
+function sendPassWhatsappNotification_(parent, passId, scannerUrl, qrUrl) {
+  if (!parent.whatsappNumber) return null;
+  const config = getTwilioConfig_();
+  if (!config.accountSid || !config.authToken || !config.fromNumber) return null;
+
+  const message = buildWhatsAppMessageText_(passId, scannerUrl, qrUrl);
+  return sendWhatsAppMessage_(parent.whatsappNumber, message, qrUrl, config);
+}
+
+function sendWhatsAppMessage_(rawNumber, body, mediaUrl, config) {
+  const phone = formatWhatsappPhone_(rawNumber);
+  if (!phone) {
+    throw new Error('Invalid WhatsApp number');
+  }
+
+  const payload = {
+    To: `whatsapp:${phone}`,
+    From: `whatsapp:${config.fromNumber}`,
+    Body: body
+  };
+  if (mediaUrl) {
+    payload.MediaUrl = mediaUrl;
+  }
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Messages.json`;
+  const response = UrlFetchApp.fetch(url, {
+    method: 'post',
+    payload: payload,
+    headers: {
+      Authorization: 'Basic ' + Utilities.base64Encode(`${config.accountSid}:${config.authToken}`)
+    },
+    muteHttpExceptions: true
+  });
+
+  const status = response.getResponseCode();
+  const text = response.getContentText();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`WhatsApp send failed: ${text}`);
+  }
+
+  if (status < 200 || status >= 300) {
+    throw new Error(`WhatsApp send failed: ${data.message || text}`);
+  }
+
+  return data;
+}
+
+function formatSmsPhone_(rawNumber) {
+  const digits = String(rawNumber || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length === 10) return `+${CONFIG.DEFAULT_COUNTRY_CODE}${digits}`;
+  if (digits.length > 10 && digits.startsWith('0')) return `+${digits.slice(1)}`;
+  if (digits.length > 0 && digits.startsWith(CONFIG.DEFAULT_COUNTRY_CODE)) return `+${digits}`;
+  return `+${digits}`;
+}
+
+function sendSmsViaTwilio_(rawNumber, body, mediaUrl, config) {
+  const phone = formatSmsPhone_(rawNumber);
+  if (!phone) throw new Error('Invalid phone number for SMS');
+
+  const from = config.fromSms || config.fromNumber;
+  if (!from) throw new Error('Twilio from number is not configured for SMS');
+
+  const payload = {
+    To: phone,
+    From: from,
+    Body: body
+  };
+  if (mediaUrl) payload.MediaUrl = mediaUrl;
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Messages.json`;
+  const response = UrlFetchApp.fetch(url, {
+    method: 'post',
+    payload: payload,
+    headers: {
+      Authorization: 'Basic ' + Utilities.base64Encode(`${config.accountSid}:${config.authToken}`)
+    },
+    muteHttpExceptions: true
+  });
+
+  const status = response.getResponseCode();
+  const text = response.getContentText();
+  let data;
+  try { data = JSON.parse(text); } catch (err) { throw new Error(`SMS send failed: ${text}`); }
+  if (status < 200 || status >= 300) {
+    throw new Error(`SMS send failed: ${data.message || text}`);
+  }
+  return data;
 }
 
 function getRecordFromTokenOrPassId_(tokenOrPassId) {
@@ -540,10 +965,14 @@ function getPassRecords_() {
     className: row.Class,
     relation: row.Relation,
     registrationStatus: row['Registration Status'],
-    entryStatus: row['Entry Status'],
+      entryStatus: row['Entry Status'],
     entryTime: row['Entry Time'],
     duplicateReason: row['Duplicate Reason'],
     sourceResponseRow: row['Source Response Row']
+      ,
+      emailStatus: row['Email Status'],
+      whatsappStatus: row['WhatsApp Status']
+        , smsStatus: row['SMS Status']
   }));
 }
 
